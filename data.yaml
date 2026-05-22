@@ -1,0 +1,8 @@
+path: /home/sk/yolov26/dataset
+train: images/train
+val: images/val
+names:
+  0: No damage
+  1: Minor damage
+  2: Major damage
+  3: Blue sheet

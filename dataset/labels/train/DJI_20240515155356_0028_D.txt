@@ -1,0 +1,1 @@
+/home/sk/asset/train_aug/labels/DJI_20240515155356_0028_D.txt
