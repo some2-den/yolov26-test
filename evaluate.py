@@ -251,7 +251,8 @@ def main():
     args = p.parse_args()
     if args.score_thrs:
         for score_thr in args.score_thrs:
-            thr_tag = f"{score_thr:g}".replace(".", "_")
+            thr_text = f"{score_thr:.6f}".rstrip("0").rstrip(".")
+            thr_tag = thr_text.replace(".", "_")
             out_dir = os.path.join(args.output_dir, f"score_thr_{thr_tag}")
             run(args.weights, args.images, args.labels, out_dir,
                 args.iou_thr, score_thr)
