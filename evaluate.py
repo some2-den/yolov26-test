@@ -79,7 +79,7 @@ def compute_metrics(cm, iou_by_class, n_cls):
             "tp": tp, "fp": fp, "fn": fn,
             "precision": tp / (tp + fp) if tp + fp else 0.0,
             "recall": tp / (tp + fn) if tp + fn else 0.0,
-            "iou": float(np.mean(ious)) if ious else 0.0,
+            "iou": np.mean(ious) if ious else 0.0,
             "matches": len(ious),
         }
     return metrics
@@ -140,7 +140,7 @@ def report(cm, metrics, labels, all_ious):
     sum_fn = int(sum(m["fn"] for m in metrics.values()))
     print(f"{'total/mean':<{w}}{sum_tp:>7}{sum_fp:>7}{sum_fn:>7}"
           f"{mp:>11.3f}{mr:>10.3f}{mi:>9.3f}{len(all_ious):>8}")
-    overall_iou = float(np.mean(all_ious)) if all_ious else 0.0
+    overall_iou = np.mean(all_ious) if all_ious else 0.0
     print(f"\n全マッチインスタンスの平均 mask IoU: {overall_iou:.3f}  "
           f"(マッチ数 {len(all_ious)})")
 
@@ -251,8 +251,7 @@ def main():
     args = p.parse_args()
     if args.score_thrs:
         for score_thr in args.score_thrs:
-            thr_text = f"{score_thr:.6f}".rstrip("0").rstrip(".")
-            thr_tag = thr_text.replace(".", "_")
+            thr_tag = f"{score_thr:.3f}".replace(".", "_")
             out_dir = os.path.join(args.output_dir, f"score_thr_{thr_tag}")
             run(args.weights, args.images, args.labels, out_dir,
                 args.iou_thr, score_thr)
