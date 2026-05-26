@@ -138,7 +138,7 @@ def report(cm, metrics, labels, all_ious):
     sum_tp = int(sum(m["tp"] for m in metrics.values()))
     sum_fp = int(sum(m["fp"] for m in metrics.values()))
     sum_fn = int(sum(m["fn"] for m in metrics.values()))
-    print(f"{'mean/sum':<{w}}{sum_tp:>7}{sum_fp:>7}{sum_fn:>7}"
+    print(f"{'total/mean':<{w}}{sum_tp:>7}{sum_fp:>7}{sum_fn:>7}"
           f"{mp:>11.3f}{mr:>10.3f}{mi:>9.3f}{len(all_ious):>8}")
     overall_iou = float(np.mean(all_ious)) if all_ious else 0.0
     print(f"\n全マッチインスタンスの平均 mask IoU: {overall_iou:.3f}  "
@@ -251,7 +251,7 @@ def main():
     args = p.parse_args()
     if args.score_thrs:
         for score_thr in args.score_thrs:
-            thr_tag = str(score_thr).replace(".", "_")
+            thr_tag = f"{score_thr:g}".replace(".", "_")
             out_dir = os.path.join(args.output_dir, f"score_thr_{thr_tag}")
             run(args.weights, args.images, args.labels, out_dir,
                 args.iou_thr, score_thr)
