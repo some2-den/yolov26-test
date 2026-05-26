@@ -54,6 +54,7 @@ python infer.py       # 比較画像 + 混同行列 + IoU
 python train.py --model yolo26s-seg.pt   # モデルサイズ変更（n/s/m/l/x）
 python train.py --epochs 150 --batch 16
 python infer.py --threshold 0.7          # スコア閾値
+python evaluate.py --score-thrs 0.25 0.5 # 複数閾値を連続評価
 ```
 
 成果物:

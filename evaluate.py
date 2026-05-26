@@ -1,9 +1,9 @@
 """学習済み YOLO26-seg を検証データで評価し、混同行列と各種指標を出力する。
 
-予測インスタンスと正解インスタンスを IoU で対応付け（クラス非依存の貪欲マッチング、
-YOLO の混同行列と同じ方式）、(クラス数+1)x(クラス数+1) の混同行列を作る。
+予測インスタンスと正解インスタンスを IoU で対応付け（クラス依存の貪欲マッチング）、
+(クラス数+1)x(クラス数+1) の混同行列を作る。
 末尾の行/列は「背景」= 未検出(FN) / 誤検出(FP) を表す。
-クラス別に precision / recall / IoU をまとめて出力する。
+クラス別に TP / FP / FN と precision / recall / IoU をまとめて出力する。
 """
 from __future__ import annotations
 
@@ -38,14 +38,22 @@ def match(preds, gts, iou_thr):
 
     preds: [(cls, score, mask)] / gts: [(cls, mask)]
     マッチ対は (pred_idx, gt_idx, iou)。
+
+    戦略:
+    1) 予測を score 降順で走査
+    2) 同一クラスの未使用 GT のみ候補
+    3) IoU が最大かつ iou_thr 以上の 1 件に割り当て
     """
     order = sorted(range(len(preds)), key=lambda i: -preds[i][1])
     used_gt = set()
     matched, fp = [], []
     for pi in order:
+        pred_cls = preds[pi][0]
         best_iou, best_gt = iou_thr, -1
-        for gi, (_, gmask) in enumerate(gts):
+        for gi, (gt_cls, gmask) in enumerate(gts):
             if gi in used_gt:
+                continue
+            if gt_cls != pred_cls:
                 continue
             iou = mask_iou(preds[pi][2], gmask)
             if iou >= best_iou:
@@ -72,6 +80,7 @@ def compute_metrics(cm, iou_by_class, n_cls):
             "precision": tp / (tp + fp) if tp + fp else 0.0,
             "recall": tp / (tp + fn) if tp + fn else 0.0,
             "iou": float(np.mean(ious)) if ious else 0.0,
+            "matches": len(ious),
         }
     return metrics
 
@@ -108,7 +117,7 @@ def plot_confusion(cm, labels, out_path, normalize=True):
 
 
 def report(cm, metrics, labels, all_ious):
-    """混同行列とクラス別指標（precision/recall/IoU）をコンソールに表示。"""
+    """混同行列とクラス別指標（TP/FP/FN + precision/recall/IoU）を表示。"""
     names = labels + ["background"]
     w = max(len(n) for n in names) + 2
     print("\n混同行列（行=正解 / 列=予測, 単位=インスタンス数）")
@@ -116,19 +125,24 @@ def report(cm, metrics, labels, all_ious):
     for i, row in enumerate(cm):
         print(f"{names[i]:<{w}}" + "".join(f"{int(v):>14}" for v in row))
 
-    print("\nクラス別指標（precision / recall / IoU をまとめて表示）")
-    print(f"{'class':<{w}}{'precision':>11}{'recall':>10}{'IoU':>9}"
-          f"{'TP':>7}{'FP':>7}{'FN':>7}")
+    print("\nクラス別指標（生カウント + 率）")
+    print(f"{'class':<{w}}{'TP':>7}{'FP':>7}{'FN':>7}"
+          f"{'precision':>11}{'recall':>10}{'IoU':>9}{'match':>8}")
     for c, m in metrics.items():
-        print(f"{labels[c]:<{w}}{m['precision']:>11.3f}{m['recall']:>10.3f}"
-              f"{m['iou']:>9.3f}{m['tp']:>7}{m['fp']:>7}{m['fn']:>7}")
+        print(f"{labels[c]:<{w}}{m['tp']:>7}{m['fp']:>7}{m['fn']:>7}"
+              f"{m['precision']:>11.3f}{m['recall']:>10.3f}{m['iou']:>9.3f}"
+              f"{m['matches']:>8}")
     mp = np.mean([m["precision"] for m in metrics.values()])
     mr = np.mean([m["recall"] for m in metrics.values()])
     mi = np.mean([m["iou"] for m in metrics.values()])
-    print(f"{'mean':<{w}}{mp:>11.3f}{mr:>10.3f}{mi:>9.3f}")
-    if all_ious:
-        print(f"\n全マッチインスタンスの平均 mask IoU: {np.mean(all_ious):.3f}  "
-              f"(マッチ数 {len(all_ious)})")
+    sum_tp = int(sum(m["tp"] for m in metrics.values()))
+    sum_fp = int(sum(m["fp"] for m in metrics.values()))
+    sum_fn = int(sum(m["fn"] for m in metrics.values()))
+    print(f"{'mean/sum':<{w}}{sum_tp:>7}{sum_fp:>7}{sum_fn:>7}"
+          f"{mp:>11.3f}{mr:>10.3f}{mi:>9.3f}{len(all_ious):>8}")
+    overall_iou = float(np.mean(all_ious)) if all_ious else 0.0
+    print(f"\n全マッチインスタンスの平均 mask IoU: {overall_iou:.3f}  "
+          f"(マッチ数 {len(all_ious)})")
 
 
 def save_outputs(cm, labels, output_dir):
@@ -232,9 +246,18 @@ def main():
     p.add_argument("--output-dir", default=f"{home}/yolov26/outputs")
     p.add_argument("--iou-thr", type=float, default=0.5)
     p.add_argument("--score-thr", type=float, default=0.5)
+    p.add_argument("--score-thrs", type=float, nargs="+", default=None,
+                   help="複数スコア閾値で評価する場合に指定（例: --score-thrs 0.25 0.5）")
     args = p.parse_args()
-    run(args.weights, args.images, args.labels, args.output_dir,
-        args.iou_thr, args.score_thr)
+    if args.score_thrs:
+        for score_thr in args.score_thrs:
+            thr_tag = str(score_thr).replace(".", "_")
+            out_dir = os.path.join(args.output_dir, f"score_thr_{thr_tag}")
+            run(args.weights, args.images, args.labels, out_dir,
+                args.iou_thr, score_thr)
+    else:
+        run(args.weights, args.images, args.labels, args.output_dir,
+            args.iou_thr, args.score_thr)
 
 
 if __name__ == "__main__":
