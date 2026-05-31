@@ -1,9 +1,10 @@
 """学習済み YOLO26-seg を検証データで評価し、混同行列と各種指標を出力する。
 
-予測インスタンスと正解インスタンスを IoU で対応付け（クラス依存の貪欲マッチング）、
-(クラス数+1)x(クラス数+1) の混同行列を作る。
-末尾の行/列は「背景」= 未検出(FN) / 誤検出(FP) を表す。
-クラス別に TP / FP / FN と precision / recall / IoU をまとめて出力する。
+予測インスタンスと正解インスタンスを IoU で対応付ける（クラス依存の貪欲法）。
+マッチ対象は同一クラスの未使用 GT のみに限定し、予測スコア降順で 1:1 対応を作る。
+(クラス数+1)x(クラス数+1) の混同行列を作り、末尾の行/列は「背景」=
+未検出(FN) / 誤検出(FP) を表す。
+クラス別に precision / recall / IoU と TP/FP/FN をまとめて出力する。
 """
 from __future__ import annotations
 
@@ -39,10 +40,8 @@ def match(preds, gts, iou_thr):
     preds: [(cls, score, mask)] / gts: [(cls, mask)]
     マッチ対は (pred_idx, gt_idx, iou)。
 
-    戦略:
-    1) 予測を score 降順で走査
-    2) 同一クラスの未使用 GT のみ候補
-    3) IoU が最大かつ iou_thr 以上の 1 件に割り当て
+    マッチングは予測スコア降順で行い、同一クラスの未使用 GT の中から
+    IoU が最大かつ iou_thr 以上の 1 件だけに割り当てる。
     """
     order = sorted(range(len(preds)), key=lambda i: -preds[i][1])
     used_gt = set()
@@ -53,7 +52,7 @@ def match(preds, gts, iou_thr):
         for gi, (gt_cls, gmask) in enumerate(gts):
             if gi in used_gt:
                 continue
-            if gt_cls != pred_cls:
+            if pred_cls != gt_cls:
                 continue
             iou = mask_iou(preds[pi][2], gmask)
             if iou >= best_iou:
@@ -79,8 +78,8 @@ def compute_metrics(cm, iou_by_class, n_cls):
             "tp": tp, "fp": fp, "fn": fn,
             "precision": tp / (tp + fp) if tp + fp else 0.0,
             "recall": tp / (tp + fn) if tp + fn else 0.0,
-            "iou": np.mean(ious) if ious else 0.0,
-            "matches": len(ious),
+            "iou": float(np.mean(ious)) if ious else 0.0,
+            "iou_matches": len(ious),
         }
     return metrics
 
@@ -117,7 +116,7 @@ def plot_confusion(cm, labels, out_path, normalize=True):
 
 
 def report(cm, metrics, labels, all_ious):
-    """混同行列とクラス別指標（TP/FP/FN + precision/recall/IoU）を表示。"""
+    """混同行列とクラス別指標（precision/recall/IoU）を表示。"""
     names = labels + ["background"]
     w = max(len(n) for n in names) + 2
     print("\n混同行列（行=正解 / 列=予測, 単位=インスタンス数）")
@@ -125,24 +124,20 @@ def report(cm, metrics, labels, all_ious):
     for i, row in enumerate(cm):
         print(f"{names[i]:<{w}}" + "".join(f"{int(v):>14}" for v in row))
 
-    print("\nクラス別指標（生カウント + 率）")
-    print(f"{'class':<{w}}{'TP':>7}{'FP':>7}{'FN':>7}"
-          f"{'precision':>11}{'recall':>10}{'IoU':>9}{'match':>8}")
+    print("\nクラス別指標（rate と TP/FP/FN の生カウント）")
+    print(f"{'class':<{w}}{'precision':>11}{'recall':>10}{'IoU':>9}"
+          f"{'IoU n':>8}{'TP':>7}{'FP':>7}{'FN':>7}")
     for c, m in metrics.items():
-        print(f"{labels[c]:<{w}}{m['tp']:>7}{m['fp']:>7}{m['fn']:>7}"
-              f"{m['precision']:>11.3f}{m['recall']:>10.3f}{m['iou']:>9.3f}"
-              f"{m['matches']:>8}")
+        print(f"{labels[c]:<{w}}{m['precision']:>11.3f}{m['recall']:>10.3f}"
+              f"{m['iou']:>9.3f}{m['iou_matches']:>8}{m['tp']:>7}"
+              f"{m['fp']:>7}{m['fn']:>7}")
     mp = np.mean([m["precision"] for m in metrics.values()])
     mr = np.mean([m["recall"] for m in metrics.values()])
     mi = np.mean([m["iou"] for m in metrics.values()])
-    sum_tp = int(sum(m["tp"] for m in metrics.values()))
-    sum_fp = int(sum(m["fp"] for m in metrics.values()))
-    sum_fn = int(sum(m["fn"] for m in metrics.values()))
-    print(f"{'total/mean':<{w}}{sum_tp:>7}{sum_fp:>7}{sum_fn:>7}"
-          f"{mp:>11.3f}{mr:>10.3f}{mi:>9.3f}{len(all_ious):>8}")
-    overall_iou = np.mean(all_ious) if all_ious else 0.0
-    print(f"\n全マッチインスタンスの平均 mask IoU: {overall_iou:.3f}  "
-          f"(マッチ数 {len(all_ious)})")
+    print(f"{'mean':<{w}}{mp:>11.3f}{mr:>10.3f}{mi:>9.3f}")
+    if all_ious:
+        print(f"\n全マッチインスタンスの平均 mask IoU: {np.mean(all_ious):.3f}  "
+              f"(マッチ数 {len(all_ious)})")
 
 
 def save_outputs(cm, labels, output_dir):
@@ -246,18 +241,38 @@ def main():
     p.add_argument("--output-dir", default=f"{home}/yolov26/outputs")
     p.add_argument("--iou-thr", type=float, default=0.5)
     p.add_argument("--score-thr", type=float, default=0.5)
-    p.add_argument("--score-thrs", type=float, nargs="+", default=None,
-                   help="複数スコア閾値で評価する場合に指定（例: --score-thrs 0.25 0.5）")
+    p.add_argument(
+        "--score-thrs",
+        nargs="+",
+        default=None,
+        help="複数のスコア閾値を指定（例: --score-thrs 0.25 0.5 または 0.25,0.5）。"
+             "指定時は --score-thr より優先。",
+    )
     args = p.parse_args()
     if args.score_thrs:
-        for score_thr in args.score_thrs:
-            thr_tag = f"{score_thr:.3f}".replace(".", "_")
-            out_dir = os.path.join(args.output_dir, f"score_thr_{thr_tag}")
-            run(args.weights, args.images, args.labels, out_dir,
-                args.iou_thr, score_thr)
+        score_thrs = []
+        for token in args.score_thrs:
+            for raw in token.split(","):
+                s = raw.strip()
+                if not s:
+                    raise SystemExit(
+                        f"--score-thrs に空の要素があります: {args.score_thrs}"
+                    )
+                try:
+                    score_thrs.append(float(s))
+                except ValueError as e:
+                    raise SystemExit(
+                        f"--score-thrs の値が不正です: '{s}' (入力: {args.score_thrs})"
+                    ) from e
     else:
-        run(args.weights, args.images, args.labels, args.output_dir,
-            args.iou_thr, args.score_thr)
+        score_thrs = [args.score_thr]
+
+    for score_thr in score_thrs:
+        out_dir = args.output_dir
+        if len(score_thrs) > 1:
+            tag = f"{score_thr:.3f}".replace(".", "p")
+            out_dir = os.path.join(args.output_dir, f"score_thr_{tag}")
+        run(args.weights, args.images, args.labels, out_dir, args.iou_thr, score_thr)
 
 
 if __name__ == "__main__":
