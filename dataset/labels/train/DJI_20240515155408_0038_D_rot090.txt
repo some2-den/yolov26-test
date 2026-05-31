@@ -1,1 +1,0 @@
-/home/sk/asset/train_aug/labels/DJI_20240515155408_0038_D_rot090.txt
